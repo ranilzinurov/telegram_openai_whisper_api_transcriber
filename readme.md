@@ -14,6 +14,8 @@ sudo apt install libmagic1
 
 Поддерживаются голосовые, аудио и видео-заметки (кружки).
 
+В группах бот автоматически реагирует на новые голосовые/кружки и сразу ставит временное сообщение «Сейчас пришлю транскрипцию…», которое позже заменяется на текст распознавания.
+
 ## Using Docker
 
 1. Set `TELEGRAM_TOKEN` and `GROQ_API_KEY` in the `Dockerfile` or supply them at runtime with `--env-file .env`.

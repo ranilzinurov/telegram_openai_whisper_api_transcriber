@@ -49,8 +49,13 @@ async def handle_voice(update: Update, context: CallbackContext) -> None:
         file_duration = update.message.video_note.duration
     else:
         file_duration = 0
+    placeholder_message = None
 
     try:
+        placeholder_message = await update.message.reply_text(
+            "Сейчас пришлю транскрипцию...",
+            reply_to_message_id=update.message.message_id,
+        )
         if update.message.voice:
             file_handle = await context.bot.get_file(update.message.voice.file_id)
         elif update.message.audio:
@@ -72,8 +77,18 @@ async def handle_voice(update: Update, context: CallbackContext) -> None:
         )
         current_time = time.strftime("%Y-%m-%d %H:%M:%S")
         transcription_time = time.time() - start_time
-        for i in range(0, len(transcript), MAX_MESSAGE_LENGTH):
-                    await update.message.reply_text(transcript[i:i+MAX_MESSAGE_LENGTH], reply_to_message_id=update.message.message_id)
+        first_chunk = transcript[:MAX_MESSAGE_LENGTH]
+        if placeholder_message:
+            try:
+                await placeholder_message.edit_text(first_chunk)
+            except Exception:
+                await update.message.reply_text(first_chunk, reply_to_message_id=update.message.message_id)
+        else:
+            await update.message.reply_text(first_chunk, reply_to_message_id=update.message.message_id)
+
+        for i in range(MAX_MESSAGE_LENGTH, len(transcript), MAX_MESSAGE_LENGTH):
+            await update.message.reply_text(transcript[i:i+MAX_MESSAGE_LENGTH], reply_to_message_id=update.message.message_id)
+
         print(f"{hashed_user_id}, {file_duration}, {transcription_time}", flush=True)
         async with aiosqlite.connect("transcriptions.db") as db:
             await db.execute("""CREATE TABLE IF NOT EXISTS transcriptions (
@@ -88,7 +103,14 @@ async def handle_voice(update: Update, context: CallbackContext) -> None:
             await db.commit()
 
     except Exception as e:
-        await update.message.reply_text(f"Ошибочка: {e}", reply_to_message_id=update.message.message_id)
+        error_text = f"Ошибочка: {e}"
+        if placeholder_message:
+            try:
+                await placeholder_message.edit_text(error_text)
+            except Exception:
+                await update.message.reply_text(error_text, reply_to_message_id=update.message.message_id)
+        else:
+            await update.message.reply_text(error_text, reply_to_message_id=update.message.message_id)
         current_time = time.strftime("%Y-%m-%d %H:%M:%S")
         async with aiosqlite.connect("transcriptions.db") as db:
             await db.execute("""CREATE TABLE IF NOT EXISTS transcriptions (
@@ -118,7 +140,11 @@ def main():
     application = Application.builder().token(telegram_token).build()
 
     start_handler = CommandHandler('start', start)
-    voice_handler = MessageHandler(filters.ChatType.PRIVATE & (filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE), handle_voice)
+    voice_handler = MessageHandler(
+        (filters.ChatType.PRIVATE | filters.ChatType.GROUPS)
+        & (filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE),
+        handle_voice,
+    )
     text_handler = CommandHandler('text', handle_command)
     mention_handler = MessageHandler(filters.ChatType.GROUPS & filters.Mention(bot_name), handle_command)
 
