@@ -1,0 +1,7 @@
+python-telegram-bot
+requests
+groq
+python-magic
+aiosqlite
+sentry-sdk
+python-dotenv
