@@ -24,6 +24,8 @@ def clean_env_str(value: str | None) -> str | None:
     if value is None:
         return None
     cleaned = value.strip().strip('"').strip("'")
+    if cleaned.lower().startswith("bearer "):
+        cleaned = cleaned[7:].strip()
     return cleaned or None
 
 
@@ -104,6 +106,13 @@ async def handle_voice(update: Update, context: CallbackContext) -> None:
 
     except Exception as e:
         error_text = f"Ошибочка: {e}"
+        if "403" in str(e) and "Forbidden" in str(e):
+            error_text += (
+                "\nПохоже, нет доступа к Groq API. "
+                "Проверь, что GROQ_API_KEY начинается с gsk_, "
+                "ключ принадлежит проекту с доступом к модели, "
+                "и .env/ENV подхватывается при запуске."
+            )
         if placeholder_message:
             try:
                 await placeholder_message.edit_text(error_text)
@@ -137,6 +146,12 @@ async def handle_command(update: Update, context: CallbackContext) -> None:
         await handle_voice(voice_update, context)
 
 def main():
+    if not telegram_token:
+        raise RuntimeError("Missing TELEGRAM_TOKEN. Set it in the environment or .env.")
+    if not groq_api_key:
+        raise RuntimeError("Missing GROQ_API_KEY. Set it in the environment or .env.")
+    if groq_api_key and not groq_api_key.startswith("gsk_"):
+        print("Warning: GROQ_API_KEY does not look like a Groq key (expected gsk_...)", flush=True)
     application = Application.builder().token(telegram_token).build()
 
     start_handler = CommandHandler('start', start)
