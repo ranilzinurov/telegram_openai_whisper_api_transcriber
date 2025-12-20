@@ -32,5 +32,13 @@ jobs:
       - name: checkout the project
         uses: actions/checkout@v3
 
-      - name: build the docker image
-        run: docker build .
+      - name: set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: build the docker image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
