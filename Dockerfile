@@ -14,11 +14,10 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# hadolint ignore=DL3013
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --disable-pip-version-check -r requirements.txt
 
 ENV GROQ_MODEL='whisper-large-v3'
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
 CMD ["python", "goodsecretarybot.py"]

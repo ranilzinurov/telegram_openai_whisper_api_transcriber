@@ -1,17 +1,13 @@
 from groq import Groq
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
-from urllib.parse import urlparse
-import asyncio
 import io
 import magic
 import os
-import requests
 import aiosqlite
 import time
 import hashlib
 import sentry_sdk
-import sqlite3
 from dotenv import load_dotenv
 
 MAX_MESSAGE_LENGTH = 4096
