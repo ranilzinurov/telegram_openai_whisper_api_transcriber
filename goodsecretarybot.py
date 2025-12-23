@@ -1,6 +1,7 @@
 from groq import Groq
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
+import asyncio
 import io
 import magic
 import os
@@ -11,6 +12,7 @@ import sentry_sdk
 from dotenv import load_dotenv
 
 MAX_MESSAGE_LENGTH = 4096
+DB_PATH = "transcriptions.db"
 
 load_dotenv()
 
@@ -31,22 +33,51 @@ groq_api_key = clean_env_str(os.environ.get('GROQ_API_KEY'))
 groq_model = clean_env_str(os.environ.get('GROQ_MODEL')) or 'whisper-large-v3'
 sentry_dsn = clean_env_str(os.environ.get('SENTRY_DSN'))
 
+
+async def init_db(_: Application) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS transcriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                hashed_user_id TEXT,
+                audio_duration INTEGER,
+                transcription_time REAL,
+                created_at TEXT
+            )"""
+        )
+        await db.commit()
+
+
+def resolve_audio_fields(message):
+    if message.voice:
+        return message.voice.file_id, message.voice.duration
+    if message.audio:
+        return message.audio.file_id, message.audio.duration
+    if message.video_note:
+        return message.video_note.file_id, message.video_note.duration
+    return None, 0
+
+
+async def transcribe_audio(file_data: io.BytesIO) -> str:
+    return await asyncio.to_thread(
+        client.audio.transcriptions.create,
+        model=groq_model,
+        file=file_data,
+        response_format="text",
+    )
+
+
 async def start(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text('Привет! Я распознаю голосовые сообщения. Вы кидаете мне голосовое, я в ответ возвращаю его текстовую версию. \n \nЕсть ограничение на максимальную длину голосового — около 40-80 минут в зависимости от того, как именно оно записано. Ещё мне можно прислать голосовую заметку из встроенного приложения айфона. \n \nРаспознавание занимает от пары секунд до пары десятков секунд, в зависимости от длины аудио. \n \nНичего не записываю и не храню.')
 
 
 async def handle_voice(update: Update, context: CallbackContext) -> None:
-    
+    if not update.message:
+        return
+
     hashed_user_id = hashlib.sha256(str(update.message.from_user.id).encode()).hexdigest()
     sentry_sdk.set_user({"id": hashed_user_id})
-    if update.message.voice:
-        file_duration = update.message.voice.duration
-    elif update.message.audio:
-        file_duration = update.message.audio.duration
-    elif update.message.video_note:
-        file_duration = update.message.video_note.duration
-    else:
-        file_duration = 0
+    file_id, file_duration = resolve_audio_fields(update.message)
     placeholder_message = None
 
     try:
@@ -54,12 +85,10 @@ async def handle_voice(update: Update, context: CallbackContext) -> None:
             "Сейчас пришлю транскрипцию...",
             reply_to_message_id=update.message.message_id,
         )
-        if update.message.voice:
-            file_handle = await context.bot.get_file(update.message.voice.file_id)
-        elif update.message.audio:
-            file_handle = await context.bot.get_file(update.message.audio.file_id)
-        elif update.message.video_note:
-            file_handle = await context.bot.get_file(update.message.video_note.file_id)
+        if not file_id:
+            await placeholder_message.edit_text("Не могу понять тип аудио.")
+            return
+        file_handle = await context.bot.get_file(file_id)
         file_data = io.BytesIO()
         await file_handle.download_to_memory(file_data)
         file_data.seek(0)
@@ -68,11 +97,7 @@ async def handle_voice(update: Update, context: CallbackContext) -> None:
         extension = mime_type.split("/")[-1] if mime_type and "/" in mime_type else "bin"
         file_data.name = f"audio.{extension}"
         start_time = time.time()
-        transcript = client.audio.transcriptions.create(
-          model=groq_model,
-          file=file_data,
-          response_format="text",
-        )
+        transcript = await transcribe_audio(file_data)
         current_time = time.strftime("%Y-%m-%d %H:%M:%S")
         transcription_time = time.time() - start_time
         first_chunk = transcript[:MAX_MESSAGE_LENGTH]
@@ -88,14 +113,7 @@ async def handle_voice(update: Update, context: CallbackContext) -> None:
             await update.message.reply_text(transcript[i:i+MAX_MESSAGE_LENGTH], reply_to_message_id=update.message.message_id)
 
         print(f"{hashed_user_id}, {file_duration}, {transcription_time}", flush=True)
-        async with aiosqlite.connect("transcriptions.db") as db:
-            await db.execute("""CREATE TABLE IF NOT EXISTS transcriptions (
-                                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                hashed_user_id TEXT,
-                                audio_duration INTEGER,
-                                transcription_time REAL,
-                                created_at TEXT
-                            )""")
+        async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("INSERT INTO transcriptions (hashed_user_id, audio_duration, transcription_time, created_at) VALUES (?, ?, ?, ?)",
                              (hashed_user_id, file_duration, transcription_time, current_time))
             await db.commit()
@@ -117,14 +135,7 @@ async def handle_voice(update: Update, context: CallbackContext) -> None:
         else:
             await update.message.reply_text(error_text, reply_to_message_id=update.message.message_id)
         current_time = time.strftime("%Y-%m-%d %H:%M:%S")
-        async with aiosqlite.connect("transcriptions.db") as db:
-            await db.execute("""CREATE TABLE IF NOT EXISTS transcriptions (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        hashed_user_id TEXT,
-                        audio_duration INTEGER,
-                        transcription_time REAL,
-                        created_at TEXT        
-                    )""")
+        async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("INSERT INTO transcriptions (hashed_user_id, audio_duration, transcription_time, created_at) VALUES (?, ?, ?, ?)",
                              (hashed_user_id, file_duration, -1, current_time))
             await db.commit()
@@ -148,7 +159,7 @@ def main():
         raise RuntimeError("Missing GROQ_API_KEY. Set it in the environment or .env.")
     if groq_api_key and not groq_api_key.startswith("gsk_"):
         print("Warning: GROQ_API_KEY does not look like a Groq key (expected gsk_...)", flush=True)
-    application = Application.builder().token(telegram_token).build()
+    application = Application.builder().token(telegram_token).post_init(init_db).build()
 
     start_handler = CommandHandler('start', start)
     voice_handler = MessageHandler(
